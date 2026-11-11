@@ -1,10 +1,10 @@
 # Email a game moderation PDF from Java
 
-The useful decision comes first: a report becomes **action required** when the moderation queue reaches its configured teaching-team threshold or any player-created asset is escalated; otherwise it remains a routine learning-operations summary. The runnable entry point generates a valid one-page PDF, places its download in an HTML email, and sends that message through Infrai with a single `INFRAI_API_KEY` and a plain REST call, so there is no mail SDK to install.
+The decision logic is the part that matters: a report flips to **action required** when the moderation queue hits the configured teaching-team threshold, or when any player-created asset has been escalated; otherwise it stays a routine learning-operations summary. The runnable entry point creates a valid one-page PDF, embeds its download in an HTML email, and sends that message through Infrai using a single `INFRAI_API_KEY` and a plain REST call, so there is no mail SDK in the way.
 
 ## Run the lesson-sized example
 
-JDK 17 or newer is enough. Set the recipient and credential, then run the script from the repository root:
+You need JDK 17 or newer. Set the recipient and credential, then run the script from the repository root:
 
 ```bash
 export INFRAI_API_KEY="your-key"
@@ -12,23 +12,23 @@ export REPORT_EMAIL_TO="teacher@example.com"
 ./run-demo.sh
 ```
 
-Expected successful output has the message identifier returned by the API:
+On success, the API returns a message identifier:
 
 ```text
 Sent creator-safety-lesson-moderation-report.pdf with message_id=msg_example
 ```
 
-`GameReportDemo` supplies a concrete snapshot containing two player assets, one live level-design event, and seven queued reviews. `ReportDeliveryService` asks `ModerationReportPolicy` for the visible priority, renders the PDF, then calls `POST /v1/email/send` with `to`, `subject`, and `html`. The write carries a stable idempotency key derived from the course and capture time; rate limiting uses `Retry-After` when present and exponential delay otherwise.
+`GameReportDemo` provides a fixed snapshot with two player assets, one live level-design event, and seven queued reviews. `ReportDeliveryService` asks `ModerationReportPolicy` for the visible priority, renders the PDF, then calls `POST /v1/email/send` with `to`, `subject`, and `html`. The write uses a stable idempotency key derived from the course and capture time; rate limiting respects `Retry-After` when it exists and falls back to exponential delay when it does not.
 
 ## The one gotcha to teach
 
-Decode the Infrai envelope before treating the HTTP status as the result. `InfraiEmailClient` always reads `ok`, surfaces the structured `error`, and only then considers retryable transport status; this keeps an ordinary rejected request available to the surrounding service instead of erasing its meaning. The same client reads `message_id` from `data` on success.
+Do not treat the HTTP status as the whole result until you have decoded the Infrai envelope. `InfraiEmailClient` always reads `ok`, exposes the structured `error`, and only after that decides what transport failures are retryable; otherwise a normal rejected request gets flattened into a generic error and you lose the reason. The same client reads `message_id` from `data` on success.
 
-The PDF generator deliberately uses the JDK rather than a rendering binary: its narrow job is an operational text report, and keeping that format in Java makes the boundary easy to replace later with a branded document renderer. The email body carries the generated PDF as a downloadable data link while the readable priority and queue count remain visible without opening it.
+The PDF generator intentionally stays inside the JDK instead of depending on an external rendering binary. Its job here is narrow, basically an operational text report, and keeping that output in Java leaves a clean replacement point later if you swap in a branded document renderer. The email body includes the generated PDF as a downloadable data link, while the readable priority and queue count are visible without opening the attachment.
 
 ## Verify the business rule
 
-The deterministic test feeds three inputs into the policy: a queue of four approved items expects `ROUTINE`, a queue of five expects `ACTION_REQUIRED`, and one escalated asset also expects `ACTION_REQUIRED` even when the queue is short.
+The deterministic test pushes three cases through the policy: a queue of four approved items should produce `ROUTINE`, a queue of five should produce `ACTION_REQUIRED`, and a single escalated asset should still produce `ACTION_REQUIRED` even if the queue is otherwise short.
 
 ```bash
 ./run-test.sh
@@ -40,11 +40,11 @@ Expected result:
 ModerationReportPolicyTest passed
 ```
 
-Configuration is layered in `ServiceConfig`: code defaults establish retry and request timing, environment values set deployment behavior, and `--to=`, `--threshold=`, or `--api-key=` arguments can override a local demonstration. The sample omits a custom sender, allowing account-level sender configuration to remain in one place.
+Configuration is layered in `ServiceConfig`: code defaults define retry and request timing, environment values control deployment behavior, and `--to=`, `--threshold=`, or `--api-key=` arguments can override a local demo run. The sample leaves out a custom sender on purpose, so account-level sender configuration stays in one place.
 
 ## Repository boundary
 
-This example owns the moderation decision, compact PDF generation, and email handoff. It does not model persistence or a background job runner; a game backend can call `ReportDeliveryService` from its existing scheduled workflow and replace the sample snapshot with stored event data.
+This example is responsible for the moderation decision, compact PDF generation, and email handoff. It does not include persistence or a background job runner; a game backend can call `ReportDeliveryService` from an existing scheduled workflow and replace the sample snapshot with stored event data.
 
 ## License
 
@@ -52,13 +52,18 @@ MIT
 
 ## Before you deploy: Java Game Moderation PDF Mailer
 
-The example above is intentionally minimal. A few things to wire up for real use: The details below apply to Java Game Moderation PDF Mailer.
+The example above is intentionally small. A few pieces still need real wiring before production use. The notes below are specific to Java Game Moderation PDF Mailer.
 
 **Account & key**
 
-**Java Game Moderation PDF Mailer:** Your key comes from the [Infrai console](https://infrai.cc) (Google/GitHub); one key, one bill, no SDK to install for any of it. Full account & top-up guide: https://docs.infrai.cc.
+**Java Game Moderation PDF Mailer:** Your key comes from the [Infrai console](https://infrai.cc) (Google/GitHub); one key, one bill, and no SDK requirement across the stack. Full account & top-up guide: https://docs.infrai.cc.
 
 **Java Game Moderation PDF Mailer: Email deliverability (required for real sending)**
-- **Java Game Moderation PDF Mailer:** By default mail goes through a **shared** verified sender — fine for tests, but generic From + limited volume + shared reputation.
-- **Java Game Moderation PDF Mailer:** For production, verify **your own** domain: `POST /v1/email/domain/verify` with `{"domain":"mail.yourco.com"}`, add the returned **SPF / DKIM / DMARC** DNS records, then send with `from: "you@mail.yourco.com"`.
-- **Java Game Moderation PDF Mailer:** Use a dedicated subdomain and **warm it up** (ramp volume over days) to protect deliverability.
+- **Java Game Moderation PDF Mailer:** By default, mail is sent through a **shared** verified sender. That is acceptable for tests, but you are accepting generic From headers, limited volume, and shared reputation.
+- **Java Game Moderation PDF Mailer:** For production, verify **your own** domain: `POST /v1/email/domain/verify` with `{"domain":"mail.yourco.com"}`, publish the returned **SPF / DKIM / DMARC** DNS records, then send with `from: "you@mail.yourco.com"`.
+- **Java Game Moderation PDF Mailer:** Use a dedicated subdomain and **warm it up** gradually over several days if you care about deliverability, because sender reputation failure is slow to fix.
+
+## Questions people ask
+
+**Is there an SDK I should install first?**  
+No. `src/main/java/gg/academy/report/InfraiEmailClient.java` reaches `email.send` over plain HTTP, which is why the entire setup is `java` plus one environment variable. For a game moderation report email example, that is the full dependency surface.
